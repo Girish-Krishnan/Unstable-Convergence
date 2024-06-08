@@ -157,4 +157,5 @@ for i, opt_name in enumerate(optimizers.keys()):
         plt.legend()
 
 plt.tight_layout()
+plt.savefig('extension.png')
 plt.show()
