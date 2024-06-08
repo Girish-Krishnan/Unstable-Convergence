@@ -10,7 +10,8 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Hyperparameters
 batch_size = 5000  # Full-batch
-learning_rates = [2 / 300, 2 / 400, 2 / 500]
+learning_rates_stable = [2 / 300, 2 / 400, 2 / 500]
+learning_rates_unstable = [2 / 30, 2 / 60, 2 / 90]
 num_epochs = 20  # We will stop when accuracy reaches 95%
 
 # CIFAR-10 dataset
@@ -19,7 +20,7 @@ transform = transforms.Compose([
     transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
 ])
 
-train_dataset = torchvision.datasets.CIFAR10(root='./data', train=True,
+train_dataset = torchvision.datasets.CIFAR10(root='../data', train=True,
                                              transform=transform, download=True)
 train_loader = torch.utils.data.DataLoader(dataset=train_dataset,
                                            batch_size=batch_size, shuffle=True)
@@ -40,8 +41,8 @@ class TanhNet(nn.Module):
         x = self.fc3(x)
         return x
 
-# Function to calculate relative progress
-def calculate_relative_progress(model, images, labels, criterion, learning_rate):
+# Function to measure directional smoothness
+def measure_directional_smoothness(model, images, labels, criterion, learning_rate):
     model.eval()
     outputs = model(images)
     loss = criterion(outputs, labels)
@@ -49,26 +50,14 @@ def calculate_relative_progress(model, images, labels, criterion, learning_rate)
     grads = torch.autograd.grad(loss, model.parameters(), create_graph=True)
     grads_flat = torch.cat([grad.view(-1) for grad in grads])
     
-    new_model = TanhNet().to(device)
-    new_model.load_state_dict(model.state_dict())
-    
-    with torch.no_grad():
-        for param, grad in zip(new_model.parameters(), grads):
-            param -= learning_rate * grad
-    
-    new_outputs = new_model(images)
-    new_loss = criterion(new_outputs, labels)
-    
-    rp = (new_loss.item() - loss.item()) / (learning_rate * grads_flat.norm().item()**2)
-    
     model.train()
-    return rp
+    return loss.item() - learning_rate * grads_flat.norm().item()
 
 # Training Function
 def train_model(model, train_loader, criterion, learning_rate, target_accuracy=95):
     optimizer = optim.SGD(model.parameters(), lr=learning_rate)
     loss_history = []
-    rp_history = []
+    directional_smoothness_history = []
     accuracy = 0
 
     while accuracy < target_accuracy:
@@ -79,8 +68,8 @@ def train_model(model, train_loader, criterion, learning_rate, target_accuracy=9
             outputs = model(images)
             loss = criterion(outputs, labels)
             
-            rp = calculate_relative_progress(model, images, labels, criterion, learning_rate)
-            rp_history.append(rp)
+            ds = measure_directional_smoothness(model, images, labels, criterion, learning_rate)
+            directional_smoothness_history.append(ds)
 
             optimizer.zero_grad()
             loss.backward()
@@ -93,47 +82,57 @@ def train_model(model, train_loader, criterion, learning_rate, target_accuracy=9
             total = labels.size(0)
             correct = (predicted == labels).sum().item()
             accuracy = (correct / total) * 100
+
             print(f'Accuracy: {accuracy:.2f}%', end='\r')
+            
             if accuracy >= target_accuracy:
                 break
 
-    return loss_history, rp_history
+    return loss_history, directional_smoothness_history
 
 criterion = nn.CrossEntropyLoss()
 
 # Train the Tanh Network with different learning rates
-results = {}
+results_stable = {}
+results_unstable = {}
 
-for lr in learning_rates:
+for lr in learning_rates_stable:
     print(f"Training with learning rate: {lr}")
     tanh_model = TanhNet().to(device)
-    loss_history, rp_history = train_model(tanh_model, train_loader, criterion, lr)
-    results[lr] = (loss_history, rp_history)
+    loss_history, directional_smoothness_history = train_model(tanh_model, train_loader, criterion, lr)
+    results_stable[lr] = (loss_history, directional_smoothness_history)
+
+for lr in learning_rates_unstable:
+    print(f"Training with learning rate: {lr}")
+    tanh_model = TanhNet().to(device)
+    loss_history, directional_smoothness_history = train_model(tanh_model, train_loader, criterion, lr)
+    results_unstable[lr] = (loss_history, directional_smoothness_history)
 
 # Plot the Results
-iterations = {lr: list(range(len(results[lr][0]))) for lr in learning_rates}
+iterations_stable = {lr: list(range(len(results_stable[lr][0]))) for lr in learning_rates_stable}
+iterations_unstable = {lr: list(range(len(results_unstable[lr][0]))) for lr in learning_rates_unstable}
 
-plt.figure(figsize=(12, 5))
+plt.figure(figsize=(18, 5))
 
-# Plot Loss
+# Plot Directional Smoothness for Stable Regime
 plt.subplot(1, 2, 1)
-for lr in learning_rates:
-    plt.plot(iterations[lr], results[lr][0], label=f'η = {lr}')
+for lr in learning_rates_stable:
+    plt.plot(iterations_stable[lr], results_stable[lr][1], label=f'η = {lr}')
 plt.xlabel('Iteration')
-plt.ylabel('Loss')
-plt.title('Loss')
+plt.ylabel(r'$L(\theta^t; \eta \nabla f(\theta^t))$')
+plt.title(r'Directional Smoothness (Stable Regime)')
 plt.legend()
 
-# Plot Relative Progress
+# Plot Directional Smoothness for Unstable Regime
 plt.subplot(1, 2, 2)
-for lr in learning_rates:
-    plt.plot(iterations[lr], results[lr][1], label=f'η = {lr}')
-plt.axhline(y=-1, color='r', linestyle='--')
+for lr in learning_rates_unstable:
+    plt.plot(iterations_unstable[lr], results_unstable[lr][1], label=f'η = {lr}')
+plt.axhline(y=2 / min(learning_rates_unstable), color='r', linestyle='--')
 plt.xlabel('Iteration')
-plt.ylabel('Relative Progress')
-plt.title('Relative Progress')
+plt.ylabel(r'$L(\theta^t; \eta \nabla f(\theta^t))$')
+plt.title(r'Directional Smoothness (Unstable Regime)')
 plt.legend()
 
 plt.tight_layout()
-plt.savefig('exp_2.png')
+plt.savefig('exp_4.png')
 plt.show()

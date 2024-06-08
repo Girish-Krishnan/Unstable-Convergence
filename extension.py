@@ -25,19 +25,19 @@ train_dataset = torchvision.datasets.CIFAR10(root='./data', train=True,
 train_loader = torch.utils.data.DataLoader(dataset=train_dataset,
                                            batch_size=batch_size, shuffle=True)
 
-# Neural Network with ReLU Activations (2 Hidden Layers)
-class ReLUNet2(nn.Module):
+# Neural Network with Tanh Activations (2 Hidden Layers)
+class TanhNet2(nn.Module):
     def __init__(self):
-        super(ReLUNet2, self).__init__()
+        super(TanhNet2, self).__init__()
         self.fc1 = nn.Linear(32*32*3, 200)
         self.fc2 = nn.Linear(200, 200)
         self.fc3 = nn.Linear(200, 10)
-        self.relu = nn.ReLU()
+        self.tanh = nn.Tanh()
 
     def forward(self, x):
         x = x.view(x.size(0), -1)
-        x = self.relu(self.fc1(x))
-        x = self.relu(self.fc2(x))
+        x = self.tanh(self.fc1(x))
+        x = self.tanh(self.fc2(x))
         x = self.fc3(x)
         return x
 
@@ -50,7 +50,7 @@ def calculate_relative_progress(model, images, labels, criterion, learning_rate)
     grads = torch.autograd.grad(loss, model.parameters(), create_graph=True)
     grads_flat = torch.cat([grad.view(-1) for grad in grads])
     
-    new_model = ReLUNet2().to(device)  # Create a new instance of the model class
+    new_model = TanhNet2().to(device)  # Create a new instance of the model class
     new_model.load_state_dict(model.state_dict())
     
     with torch.no_grad():
@@ -83,8 +83,7 @@ def calculate_rhs(model, images, labels, criterion, learning_rate):
     return lhs
 
 # Training Function
-def train_model(model, train_loader, criterion, learning_rate, num_epochs):
-    optimizer = optim.SGD(model.parameters(), lr=learning_rate)
+def train_model(model, train_loader, criterion, optimizer, learning_rate, num_epochs):
     loss_history = []
     rp_history = []
     rhs_history = []
@@ -129,28 +128,33 @@ def train_model(model, train_loader, criterion, learning_rate, num_epochs):
 
 criterion = nn.CrossEntropyLoss()
 
-# Train the ReLU Network with different learning rates
+# Train the Tanh Network with Adam and RMSProp
+optimizers = {'Adam': optim.Adam, 'RMSProp': optim.RMSprop}
 results = {}
-for lr in learning_rates:
-    print(f"Training ReLU Network with learning rate: {lr}")
-    relu_model = ReLUNet2().to(device)
-    loss_history, rp_history, rhs_history = train_model(relu_model, train_loader, criterion, lr, num_epochs)
-    results[lr] = (loss_history, rp_history, rhs_history)
+
+for opt_name, opt_class in optimizers.items():
+    results[opt_name] = {}
+    for lr in learning_rates:
+        print(f"Training Tanh Network with {opt_name} and learning rate: {lr}")
+        tanh_model = TanhNet2().to(device)
+        optimizer = opt_class(tanh_model.parameters(), lr=lr)
+        loss_history, rp_history, rhs_history = train_model(tanh_model, train_loader, criterion, optimizer, lr, num_epochs)
+        results[opt_name][lr] = (loss_history, rp_history, rhs_history)
 
 # Plot the Results
 epochs = list(range(num_epochs))
 
-plt.figure(figsize=(18, 5))
+plt.figure(figsize=(18, 10))
 
-for i, lr in enumerate(learning_rates):
-    plt.subplot(1, 3, i + 1)
-    plt.plot(epochs, results[lr][1], label='E[RP(θ^t)]', linestyle='dotted', color='red')
-    plt.plot(epochs, results[lr][2], label='RHS', linestyle='solid', color='blue')
-    plt.xlabel('Epoch')
-    plt.ylabel('Value')
-    plt.title(f'η = {lr}')
-    plt.legend()
+for i, opt_name in enumerate(optimizers.keys()):
+    for j, lr in enumerate(learning_rates):
+        plt.subplot(len(optimizers), len(learning_rates), i * len(learning_rates) + j + 1)
+        plt.plot(epochs, results[opt_name][lr][1], label='E[RP(θ^t)]', linestyle='dotted', color='red')
+        plt.plot(epochs, results[opt_name][lr][2], label='RHS', linestyle='solid', color='blue')
+        plt.xlabel('Epoch')
+        plt.ylabel('Value')
+        plt.title(f'{opt_name}, η = {lr}')
+        plt.legend()
 
 plt.tight_layout()
-plt.savefig('exp_8.png')
 plt.show()

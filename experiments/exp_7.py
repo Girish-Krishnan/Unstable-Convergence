@@ -11,7 +11,7 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Hyperparameters
 batch_size = 32  # Minibatch size
-learning_rates = [2 / 50, 2 / 100, 2 / 150]
+learning_rate = 2 / 100
 num_epochs = 300
 
 # CIFAR-10 dataset
@@ -20,24 +20,24 @@ transform = transforms.Compose([
     transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
 ])
 
-train_dataset = torchvision.datasets.CIFAR10(root='./data', train=True,
+train_dataset = torchvision.datasets.CIFAR10(root='../data', train=True,
                                              transform=transform, download=True)
 train_loader = torch.utils.data.DataLoader(dataset=train_dataset,
                                            batch_size=batch_size, shuffle=True)
 
-# Neural Network with Tanh Activations (2 Hidden Layers)
-class TanhNet2(nn.Module):
+# Neural Network with ReLU Activations (2 Hidden Layers)
+class ReLUNet2(nn.Module):
     def __init__(self):
-        super(TanhNet2, self).__init__()
+        super(ReLUNet2, self).__init__()
         self.fc1 = nn.Linear(32*32*3, 200)
         self.fc2 = nn.Linear(200, 200)
         self.fc3 = nn.Linear(200, 10)
-        self.tanh = nn.Tanh()
+        self.relu = nn.ReLU()
 
     def forward(self, x):
         x = x.view(x.size(0), -1)
-        x = self.tanh(self.fc1(x))
-        x = self.tanh(self.fc2(x))
+        x = self.relu(self.fc1(x))
+        x = self.relu(self.fc2(x))
         x = self.fc3(x)
         return x
 
@@ -50,7 +50,7 @@ def calculate_relative_progress(model, images, labels, criterion, learning_rate)
     grads = torch.autograd.grad(loss, model.parameters(), create_graph=True)
     grads_flat = torch.cat([grad.view(-1) for grad in grads])
     
-    new_model = TanhNet2().to(device)  # Create a new instance of the model class
+    new_model = ReLUNet2().to(device)  # Create a new instance of the model class
     new_model.load_state_dict(model.state_dict())
     
     with torch.no_grad():
@@ -65,34 +65,15 @@ def calculate_relative_progress(model, images, labels, criterion, learning_rate)
     model.train()
     return rp
 
-# Function to calculate RHS of (5.1)
-def calculate_rhs(model, images, labels, criterion, learning_rate):
-    model.eval()
-    outputs = model(images)
-    loss = criterion(outputs, labels)
-    
-    grads = torch.autograd.grad(loss, model.parameters(), create_graph=True)
-    grads_flat = torch.cat([grad.view(-1) for grad in grads])
-    
-    hessian_vector_product = torch.autograd.grad(grads_flat.norm(), model.parameters(), retain_graph=True)
-    hessian_norm = torch.norm(torch.cat([hvp.view(-1) for hvp in hessian_vector_product])).item()
-    
-    lhs = -1 + (learning_rate / 2) * hessian_norm
-    
-    model.train()
-    return lhs
-
 # Training Function
 def train_model(model, train_loader, criterion, learning_rate, num_epochs):
     optimizer = optim.SGD(model.parameters(), lr=learning_rate)
     loss_history = []
     rp_history = []
-    rhs_history = []
 
     for epoch in range(num_epochs):
         epoch_loss = 0
         epoch_rp = 0
-        epoch_rhs = 0
         num_batches = 0
         
         for images, labels in train_loader:
@@ -103,9 +84,7 @@ def train_model(model, train_loader, criterion, learning_rate, num_epochs):
             loss = criterion(outputs, labels)
             
             rp = calculate_relative_progress(model, images, labels, criterion, learning_rate)
-            rhs = calculate_rhs(model, images, labels, criterion, learning_rate)
             epoch_rp += rp
-            epoch_rhs += rhs
             num_batches += 1
 
             optimizer.zero_grad()
@@ -114,43 +93,56 @@ def train_model(model, train_loader, criterion, learning_rate, num_epochs):
 
             epoch_loss += loss.item()
         
-        # Average loss, RP, and RHS for the epoch
+        # Average loss and RP for the epoch
         epoch_loss /= num_batches
         epoch_rp /= num_batches
-        epoch_rhs /= num_batches
 
         loss_history.append(epoch_loss)
         rp_history.append(epoch_rp)
-        rhs_history.append(epoch_rhs)
         
-        print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {epoch_loss:.4f}, Expected RP: {epoch_rp:.4f}, RHS: {epoch_rhs:.4f}')
+        print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {epoch_loss:.4f}, Expected RP: {epoch_rp:.4f}')
 
-    return loss_history, rp_history, rhs_history
+    return loss_history, rp_history
 
 criterion = nn.CrossEntropyLoss()
 
-# Train the Tanh Network with different learning rates
-results = {}
-for lr in learning_rates:
-    print(f"Training Tanh Network with learning rate: {lr}")
-    tanh_model = TanhNet2().to(device)
-    loss_history, rp_history, rhs_history = train_model(tanh_model, train_loader, criterion, lr, num_epochs)
-    results[lr] = (loss_history, rp_history, rhs_history)
+# Train the ReLU Network
+print(f"Training ReLU Network with learning rate: {learning_rate}")
+relu_model = ReLUNet2().to(device)
+loss_history, rp_history = train_model(relu_model, train_loader, criterion, learning_rate, num_epochs)
 
 # Plot the Results
 epochs = list(range(num_epochs))
 
 plt.figure(figsize=(18, 5))
 
-for i, lr in enumerate(learning_rates):
-    plt.subplot(1, 3, i + 1)
-    plt.plot(epochs, results[lr][1], label='E[RP(θ^t)]', linestyle='dotted', color='red')
-    plt.plot(epochs, results[lr][2], label='RHS', linestyle='solid', color='blue')
-    plt.xlabel('Epoch')
-    plt.ylabel('Value')
-    plt.title(f'η = {lr}')
-    plt.legend()
+# Plot Loss
+plt.subplot(1, 3, 1)
+plt.plot(epochs, loss_history, label='Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.title('Loss')
+plt.legend()
+
+# Plot Expected Relative Progress
+plt.subplot(1, 3, 2)
+plt.plot(epochs, rp_history, label='Expected RP')
+plt.axhline(y=0, color='r', linestyle='--')
+plt.xlabel('Epoch')
+plt.ylabel('Expected RP')
+plt.title('Expected Relative Progress')
+plt.legend()
+
+# Plot Zoomed-in Expected Relative Progress
+plt.subplot(1, 3, 3)
+plt.plot(epochs, rp_history, label='Expected RP')
+plt.axhline(y=0, color='r', linestyle='--')
+plt.ylim([-0.5, 0.5])
+plt.xlabel('Epoch')
+plt.ylabel('Expected RP')
+plt.title('Expected Relative Progress (Zoomed-in)')
+plt.legend()
 
 plt.tight_layout()
-plt.savefig('exp_9.png')
+plt.savefig('exp_7.png')
 plt.show()
